@@ -1,0 +1,21 @@
+services:
+  ardupilot-sitl:
+    build: .
+    platform: linux/amd64
+    tty: true
+    environment:
+      - SITL_UDP_OUTPUT_ADDRESS=udp:host.docker.internal:14550
+      # Home = takeoff/landing spot SE of Little Caesars Arena, Detroit
+      # (ground elevation ~183 m MSL).
+      - LAT=42.33927724437817
+      - LON=-83.05286810960271
+      - ALT=183
+      - DIR=0
+    ports:
+      - 5760:5760
+      - 14550:14550/udp
+
+  mapserver:
+    build: ./mapserver
+    ports:
+      - 8000:8000

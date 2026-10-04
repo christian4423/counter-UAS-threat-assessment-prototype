@@ -1,0 +1,271 @@
+MAP
+  NAME "sitl_map"
+  STATUS ON
+  SIZE 800 600
+  UNITS meters
+  EXTENT -9246000 5211000 -9244000 5213000
+  IMAGETYPE PNG
+  IMAGECOLOR 0 0 0
+  FONTSET "fonts.txt"
+
+  PROJECTION
+    "init=epsg:3857"
+  END
+
+  WEB
+    IMAGEPATH "/tmp/"
+    IMAGEURL "/tmp/"
+  END
+
+  # Must be defined before any LAYER/CLASS/STYLE references it by name.
+  SYMBOL
+    NAME "default"
+    TYPE ellipse
+    POINTS
+      1 1
+    END
+    FILLED true
+  END
+
+  # Layer split: this file owns ALL styling; app.py owns ALL geometry. Every
+  # vector layer below has no DATA/CONNECTION - app.py fills it with
+  # layer.addFeature(), which makes it an inline layer at runtime.
+
+  # ---------------------------------------------------------------- basemap
+  # Esri World Imagery (~0.5 m/px) XYZ tiles via GDAL's WMS/TMS driver.
+  # The XML must begin with <GDAL_WMS> (no comment first) or GDAL rejects it.
+  LAYER
+    NAME "esri_world_imagery"
+    TYPE RASTER
+    STATUS DEFAULT
+    DATA "esri_world_imagery.xml"
+    PROCESSING "RESAMPLE=BILINEAR"
+    PROJECTION
+      "init=epsg:3857"
+    END
+  END
+
+  # ---------------------------------------------------------- airspace zones
+  LAYER
+    NAME "zone_warning"
+    TYPE POLYGON
+    STATUS DEFAULT
+    PROJECTION
+      "init=epsg:3857"
+    END
+    CLASS
+      STYLE
+        COLOR 255 170 0
+        OPACITY 12
+      END
+      STYLE
+        OUTLINECOLOR 255 170 0
+        WIDTH 2
+        PATTERN 12 8 END
+      END
+    END
+  END
+
+  LAYER
+    NAME "zone_nofly"
+    TYPE POLYGON
+    STATUS DEFAULT
+    PROJECTION
+      "init=epsg:3857"
+    END
+    CLASS
+      STYLE
+        COLOR 230 30 30
+        OPACITY 22
+      END
+      STYLE
+        OUTLINECOLOR 230 30 30
+        WIDTH 2.5
+      END
+    END
+  END
+
+  LAYER
+    NAME "protected_asset"
+    TYPE POLYGON
+    STATUS DEFAULT
+    PROJECTION
+      "init=epsg:3857"
+    END
+    CLASS
+      STYLE
+        OUTLINECOLOR 255 255 255
+        WIDTH 2
+      END
+    END
+  END
+
+  # ------------------------------------------------------------ drone track
+  LAYER
+    NAME "track"
+    TYPE LINE
+    STATUS DEFAULT
+    PROJECTION
+      "init=epsg:3857"
+    END
+    CLASS
+      STYLE
+        COLOR 0 0 0
+        WIDTH 4
+        OPACITY 50
+      END
+      STYLE
+        COLOR 80 170 255
+        WIDTH 2
+      END
+    END
+  END
+
+  # ------------------------------------------- drone marker, one per threat
+  # app.py adds the point to exactly one of these based on distance.
+  LAYER
+    NAME "drone_clear"
+    TYPE POINT
+    STATUS DEFAULT
+    PROJECTION
+      "init=epsg:3857"
+    END
+    CLASS
+      STYLE
+        SYMBOL "default"
+        SIZE 18
+        COLOR 255 255 255
+      END
+      STYLE
+        SYMBOL "default"
+        SIZE 12
+        COLOR 0 200 83
+      END
+      LABEL
+        FONT "sans-bold"
+        TYPE truetype
+        SIZE 9
+        COLOR 255 255 255
+        OUTLINECOLOR 0 0 0
+        OUTLINEWIDTH 2
+        POSITION ur
+        OFFSET 6 -6
+        FORCE true
+      END
+    END
+  END
+
+  LAYER
+    NAME "drone_warning"
+    TYPE POINT
+    STATUS DEFAULT
+    PROJECTION
+      "init=epsg:3857"
+    END
+    CLASS
+      STYLE
+        SYMBOL "default"
+        SIZE 18
+        COLOR 255 255 255
+      END
+      STYLE
+        SYMBOL "default"
+        SIZE 12
+        COLOR 255 170 0
+      END
+      LABEL
+        FONT "sans-bold"
+        TYPE truetype
+        SIZE 9
+        COLOR 255 255 255
+        OUTLINECOLOR 0 0 0
+        OUTLINEWIDTH 2
+        POSITION ur
+        OFFSET 6 -6
+        FORCE true
+      END
+    END
+  END
+
+  LAYER
+    NAME "drone_breach"
+    TYPE POINT
+    STATUS DEFAULT
+    PROJECTION
+      "init=epsg:3857"
+    END
+    CLASS
+      STYLE
+        SYMBOL "default"
+        SIZE 22
+        COLOR 255 255 255
+      END
+      STYLE
+        SYMBOL "default"
+        SIZE 16
+        COLOR 230 30 30
+      END
+      LABEL
+        FONT "sans-bold"
+        TYPE truetype
+        SIZE 9
+        COLOR 255 255 255
+        OUTLINECOLOR 0 0 0
+        OUTLINEWIDTH 2
+        POSITION ur
+        OFFSET 6 -6
+        FORCE true
+      END
+    END
+  END
+
+  # ------------------------------------------------------- screen overlays
+  # TRANSFORM ul/lr = feature coordinates are pixel offsets from that corner.
+  LAYER
+    NAME "status_banner"
+    TYPE POINT
+    STATUS DEFAULT
+    TRANSFORM ul
+    CLASS
+      LABEL
+        FONT "sans-bold"
+        TYPE truetype
+        SIZE 11
+        COLOR 255 255 255
+        POSITION lr
+        WRAP "|"
+        ALIGN left
+        FORCE true
+        STYLE
+          GEOMTRANSFORM "labelpoly"
+          COLOR 0 0 0
+          OPACITY 65
+        END
+      END
+    END
+  END
+
+  LAYER
+    NAME "attribution"
+    TYPE POINT
+    STATUS DEFAULT
+    TRANSFORM lr
+    FEATURE
+      POINTS -6 -6 END
+      TEXT "Imagery: Esri, Maxar, Earthstar Geographics"
+    END
+    CLASS
+      LABEL
+        FONT "sans"
+        TYPE truetype
+        SIZE 7
+        COLOR 255 255 255
+        OUTLINECOLOR 0 0 0
+        OUTLINEWIDTH 1
+        POSITION ul
+        FORCE true
+      END
+    END
+  END
+
+END

@@ -1,0 +1,15 @@
+# macOS
+.DS_Store
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Per-flight full-resolution map frames (~230 MB per run, rebuilt every flight)
+src/threat_map_frames/
+
+# Editor
+.vscode/
+.idea/
