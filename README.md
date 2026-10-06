@@ -56,32 +56,87 @@ Example output from one flight:
   - [`app.py`](mapserver/app.py) holds **all geometry**: the asset polygon, the zone rings (drawn as true ground-distance circles, corrected for Web Mercator scale) and the drone and its track. Each is added to an empty layer as an inline feature.
 - **`src/main.py`** is the operator-side client. It sends commands to the vehicle and records telemetry. It also requests map frames on a worker thread, so slow tile rendering never stalls the MAVLink connection.
 
-## Running it
+## Running it locally
 
-Requirements: Docker, and Python 3.10+ on the host.
+### Prerequisites
+
+- **Docker** with Compose v2 (Docker Desktop on macOS/Windows)
+- **Python 3.10+** on the host
+- **Internet access**: the build clones ArduPilot, and the map server downloads imagery tiles
+- **UDP port 14550 free** on the host. Close QGroundControl or Mission Planner, since they listen on the same port.
+
+### 1. Clone
 
 ```bash
-# 1. Start the simulator and map server
-docker compose up -d --build
+git clone https://github.com/christian4423/counter-UAS-threat-assessment-prototype.git
+cd counter-UAS-threat-assessment-prototype
+```
 
-# 2. Install the client's dependencies
+### 2. Build and start the containers
+
+```bash
+docker compose up -d --build
+```
+
+The first build is slow because it compiles ArduPilot from source. On Apple Silicon it is slower still: the SITL image is `linux/amd64` and runs under emulation. Later starts reuse the cached image.
+
+### 3. Check both services
+
+```bash
+docker compose ps                      # both containers should be "Up"
+curl http://localhost:8000/health      # {"status":"ok"}
+```
+
+Open <http://localhost:8000/map> in a browser. You should see the arena, both rings and a marker at the takeoff spot.
+
+The simulator needs about a minute after starting to get a GPS fix. To watch for it:
+
+```bash
+docker compose logs -f ardupilot-sitl  # wait for "EKF3 IMU0 is using GPS", then Ctrl+C
+```
+
+### 4. Set up the client
+
+```bash
 cd src
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-
-# 3. Fly the intrusion (~6 min). Wait about a minute after step 1 first,
-#    so the simulator has a GPS fix.
-.venv/bin/python main.py
+source .venv/bin/activate              # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
 ```
+
+### 5. Fly the intrusion
+
+```bash
+python main.py
+```
+
+A full flight takes about 6 minutes. While it runs, the console prints a line each time the threat state changes. You can also refresh <http://localhost:8000/map> in the browser while it flies. Press **Ctrl+C** to stop early; the plots and map are still saved.
 
 The script writes its output to `src/`:
 
 - `telemetry_plot.png`: attitude, altitude and ground-speed plots
 - `threat_map.png`: final map with the full track
 - `threat_map.gif`: animated replay
-- `threat_map_frames/`: every full-resolution frame (git-ignored)
+- `threat_map_frames/`: every full-resolution frame (git-ignored, ~230 MB, cleared each run)
 
-### Map API
+### 6. Stop
+
+```bash
+docker compose down
+```
+
+To fly again from the pad, run `docker compose up -d`, wait for the GPS fix, then run `python main.py`. Restarting the containers resets the simulated vehicle to its home position.
+
+### Troubleshooting
+
+| Symptom | Cause / fix |
+|---|---|
+| `main.py` hangs with no "Heartbeat from system" line | No MAVLink is reaching port 14550. Check that `ardupilot-sitl` is up, and that no ground-control app is holding the port. |
+| `Arm: Need Position Estimate` repeats | Normal for the first minute after boot. The script retries arming for 90 s; if it gives up, wait and rerun. |
+| `Map render failed` in the console, or a black map | The map server can't download imagery tiles. Check its internet access: `docker compose logs mapserver`. |
+| Changes to `mapserver/` don't show up | The app and mapfiles are baked into the image. Rebuild with `docker compose up -d --build mapserver`. |
+
+## Map API
 
 `GET http://localhost:8000/map` returns `image/png`. The threat assessment also comes back in headers, so other code can use it without decoding the image.
 
