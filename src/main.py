@@ -245,7 +245,7 @@ def goto_until_reached(lat, lon, alt):
     print(f"Navigating to Target: Lat={lat}, Lon={lon}, Alt={alt}")
     last_sent = 0, 
     deadline = time.time() + 180
-    while time.now() < deadline:
+    while time.time() < deadline:
         now = time.time()
         # 1. Send the command to the vehicle
         if last_sent - now > 0.5:
