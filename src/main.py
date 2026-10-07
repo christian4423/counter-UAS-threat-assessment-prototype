@@ -32,6 +32,7 @@ GIF_SPEEDUP = 8          # playback speed relative to real time
 CRUISE_ALT_M = 40
 CRUISE_SPEED_MS = 12
 WAYPOINT_RADIUS_M = 15
+EARTH_RADIUS = 6371008.8
 WAYPOINTS = [
     (42.3365, -83.0490),   # SE, outside warning ring  -> CLEAR
     (42.3395, -83.0510),   # inbound                   -> WARNING
@@ -105,7 +106,7 @@ def ground_distance_m(a, b):
     lat1, lon1, lat2, lon2 = map(math.radians, (*a, *b))
     h = (math.sin((lat2 - lat1) / 2) ** 2
          + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2)
-    return 2 * 6371008.8 * math.asin(math.sqrt(h))
+    return 2 * EARTH_RADIUS * math.asin(math.sqrt(h))
 
 
 def map_query(pos):
@@ -220,31 +221,6 @@ def arm():
             pump()
     raise TimeoutError("Vehicle never passed pre-arm checks")
 
-def haversine_horizontal(x, x_delta, y, y_delta):
-    # Haversine formula for horizontal distance
-    R = 6371000.0
-    a = (math.sin(x_delta / 2) ** 2 + 
-         math.cos(x) * math.cos(y) * math.sin(y_delta / 2) ** 2)
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    return R * c
-
-
-def get_distance_meters(curr_lat, curr_lon, curr_alt, target_lat, target_lon, target_alt):
-    # Calculates the 3D distance between current coordinates and target coordinates.
-    
-    phi1 = math.radians(curr_lat)
-    phi2 = math.radians(target_lat)
-    delta_phi = math.radians(target_lat - curr_lat)
-    delta_lambda = math.radians(target_lon - curr_lon)
-    horizontal_dist = haversine_horizontal(phi1, delta_phi, phi2, delta_lambda)
-
-    # Vertical distance
-    vertical_dist = target_alt - curr_alt
-
-    # Total 3D distance
-    return math.sqrt(horizontal_dist**2 + vertical_dist**2)
-
-
 def goto(lat, lon, alt):
     # Position-only setpoint in GUIDED mode; alt is relative to home.
     master.mav.set_position_target_global_int_send(
@@ -254,45 +230,34 @@ def goto(lat, lon, alt):
         mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,      # coordinate frame
         0b0000111111111000,  # type_mask: use only lat/lon/alt  # ignore bits
         int(lat * 1e7),                                         # latitude (scaled integer * 1e7)
-        int(lon * 1e7),                                         # latitude (scaled integer * 1e7)
+        int(lon * 1e7),                                         # longitude (scaled integer * 1e7)
         alt,                                                    # altitude
         0, 0, 0,                                                # velocity
         0, 0, 0,                                                # acceleration
         0, 0                                                    # yaw / yaw rate
     )
 
-def goto_until_reached(lat, lon, alt, radius_threshold=1.0):
+def goto_until_reached(lat, lon, alt):
     """
     Sends the global position setpoint at 2 Hz until the vehicle is inside 
     the specified radius_threshold (in meters).
     """
     print(f"Navigating to Target: Lat={lat}, Lon={lon}, Alt={alt}")
-
-    while True:
+    last_sent = 0, 
+    deadline = time.time() + 180
+    while time.now() < deadline:
+        now = time.time()
         # 1. Send the command to the vehicle
-        goto(lat, lon, alt)
-
-        # 2. Request current global position feedback from telemetry (GLOBAL_POSITION_INT)
-        # Wait up to 1 second for a new message
-        msg = master.recv_match(type='GLOBAL_POSITION_INT', blocking=True, timeout=1.0)
-
-        if msg:
-            # Convert telemetry fields back to standard floats/meters
-            curr_lat = msg.lat / 1e7
-            curr_lon = msg.lon / 1e7
-            curr_alt = msg.relative_alt / 1000.0 # GLOBAL_POSITION_INT relative_alt is in mm
-            
-            # 3. Calculate remaining distance
-            distance = get_distance_meters(curr_lat, curr_lon, curr_alt, lat, lon, alt)
-            print(f"Distance remaining to waypoint: {distance:.2f} meters")
-            
-            # 4. Break the loop if inside the acceptable target radius
-            if distance <= radius_threshold:
-                print("Waypoint reached successfully.")
-                break
-
-        # 5. Maintain the loop rate (~2 Hz execution)
-        time.sleep(0.5)
+        if last_sent - now > 0.5:
+            goto(lat, lon, alt)
+            last_sent = now
+        pump()
+        if ground_distance_m((position["lat"], position["lon"]), (lat, lon)) < WAYPOINT_RADIUS_M:
+            print("Vehicle arrived at waypoint")
+            break
+                
+    if time.time() > deadline:
+        raise TimeoutError("Vehicle did not reach waypoint in time")
 
 def fly_mission():
     request_interval(mavutil.mavlink.MAVLINK_MSG_ID_ATTITUDE, 4)
