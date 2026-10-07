@@ -32,6 +32,7 @@ GIF_SPEEDUP = 8          # playback speed relative to real time
 CRUISE_ALT_M = 40
 CRUISE_SPEED_MS = 12
 WAYPOINT_RADIUS_M = 15
+EARTH_RADIUS_M = 6371008.8
 WAYPOINTS = [
     (42.3365, -83.0490),   # SE, outside warning ring  -> CLEAR
     (42.3395, -83.0510),   # inbound                   -> WARNING
@@ -105,7 +106,7 @@ def ground_distance_m(a, b):
     lat1, lon1, lat2, lon2 = map(math.radians, (*a, *b))
     h = (math.sin((lat2 - lat1) / 2) ** 2
          + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2)
-    return 2 * 6371008.8 * math.asin(math.sqrt(h))
+    return 2 * EARTH_RADIUS_M * math.asin(math.sqrt(h))
 
 
 def map_query(pos):
@@ -220,16 +221,42 @@ def arm():
             pump()
     raise TimeoutError("Vehicle never passed pre-arm checks")
 
-
 def goto(lat, lon, alt):
     # Position-only setpoint in GUIDED mode; alt is relative to home.
     master.mav.set_position_target_global_int_send(
-        0, master.target_system, master.target_component,
-        mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
-        0b0000111111111000,  # type_mask: use only lat/lon/alt
-        int(lat * 1e7), int(lon * 1e7), alt,
-        0, 0, 0, 0, 0, 0, 0, 0)
+        0,                                                      # time_boot_ms
+        master.target_system,                                   # target system ID
+        master.target_component,                                # target component ID
+        mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,      # coordinate frame
+        0b0000111111111000,                                     # type_mask: use only lat/lon/alt
+        int(lat * 1e7),                                         # latitude (scaled integer * 1e7)
+        int(lon * 1e7),                                         # longitude (scaled integer * 1e7)
+        alt,                                                    # altitude
+        0, 0, 0,                                                # velocity
+        0, 0, 0,                                                # acceleration
+        0, 0                                                    # yaw / yaw rate
+    )
 
+def goto_until_reached(lat, lon, alt) -> bool:
+    """
+    Sends the global position setpoint at 2 Hz until the vehicle is inside 
+    the specified WAYPOINT_RADIUS_M (in meters).
+    """
+    print(f"Navigating to Target: Lat={lat}, Lon={lon}, Alt={alt}")
+    last_sent = 0
+    deadline = time.time() + 180
+    while time.time() < deadline:
+        now = time.time()
+        # 1. Send the command to the vehicle
+        if now - last_sent > 0.5:
+            goto(lat, lon, alt)
+            last_sent = now
+        pump()
+        if ground_distance_m((position["lat"], position["lon"]), (lat, lon)) < WAYPOINT_RADIUS_M:
+            print("Vehicle arrived at waypoint")
+            return True
+                
+    raise TimeoutError("Vehicle did not reach waypoint in time")
 
 def fly_mission():
     request_interval(mavutil.mavlink.MAVLINK_MSG_ID_ATTITUDE, 4)
@@ -248,9 +275,7 @@ def fly_mission():
 
     for i, (lat, lon) in enumerate(WAYPOINTS, 1):
         print(f"Waypoint {i}/{len(WAYPOINTS)}: {lat}, {lon}")
-        goto(lat, lon, CRUISE_ALT_M)
-        wait_until(lambda: ground_distance_m((position["lat"], position["lon"]), (lat, lon))
-                   < WAYPOINT_RADIUS_M, 180, f"waypoint {i}")
+        goto_until_reached(lat, lon, CRUISE_ALT_M)
 
     set_mode("RTL")
     # RTL ends with an automatic landing + disarm.
