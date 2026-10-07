@@ -17,7 +17,7 @@ from PIL import Image
 OUT_DIR = Path(__file__).resolve().parent
 FRAMES_DIR = OUT_DIR / "threat_map_frames"
 
-MAP_URL = "http://localhost:8000/map"
+MAP_URL = "http://localhost:8080/map"
 FRAME_INTERVAL = 2.0     # seconds between map frames
 TRACK_INTERVAL = 1.0     # seconds between breadcrumbs kept in the track
 TRACK_MAX_POINTS = 400   # caps the URL length of the track query param

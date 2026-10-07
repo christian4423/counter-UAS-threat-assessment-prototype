@@ -84,10 +84,10 @@ The first build is slow because it compiles ArduPilot from source. On Apple Sili
 
 ```bash
 docker compose ps                      # both containers should be "Up"
-curl http://localhost:8000/health      # {"status":"ok"}
+curl http://localhost:8080/health      # {"status":"ok"}
 ```
 
-Open <http://localhost:8000/map> in a browser. You should see the arena, both rings and a marker at the takeoff spot.
+Open <http://localhost:8080/map> in a browser. You should see the arena, both rings and a marker at the takeoff spot.
 
 The simulator needs about a minute after starting to get a GPS fix. To watch for it:
 
@@ -110,7 +110,7 @@ pip install -r requirements.txt
 python main.py
 ```
 
-A full flight takes about 6 minutes. While it runs, the console prints a line each time the threat state changes. You can also refresh <http://localhost:8000/map> in the browser while it flies. Press **Ctrl+C** to stop early; the plots and map are still saved.
+A full flight takes about 6 minutes. While it runs, the console prints a line each time the threat state changes. You can also refresh <http://localhost:8080/map> in the browser while it flies. Press **Ctrl+C** to stop early; the plots and map are still saved.
 
 The script writes its output to `src/`:
 
@@ -138,7 +138,7 @@ To fly again from the pad, run `docker compose up -d`, wait for the GPS fix, the
 
 ## Map API
 
-`GET http://localhost:8000/map` returns `image/png`. The threat assessment also comes back in headers, so other code can use it without decoding the image.
+`GET http://localhost:8080/map` returns `image/png`. The threat assessment also comes back in headers, so other code can use it without decoding the image.
 
 | Query param | Default | Description |
 |---|---|---|
