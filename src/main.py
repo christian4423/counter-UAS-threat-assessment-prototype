@@ -76,6 +76,7 @@ state_lock = threading.Lock()
 
 
 def send_command(command, *params, wait_ack=True):
+    last_sent = time.time()
     params = list(params) + [0] * (7 - len(params))
     master.mav.command_long_send(
         master.target_system,
@@ -88,11 +89,21 @@ def send_command(command, *params, wait_ack=True):
         return None
     # Pump other messages while waiting so telemetry keeps being recorded.
     deadline = time.time() + 5
+
     while time.time() < deadline:
+        if time.time() - last_sent > 0.5:
+            last_sent = time.time()
+            master.mav.command_long_send(
+                master.target_system,
+                master.target_component,
+                command,
+                0,  # confirmation
+                *params,
+            )
         msg = pump()
         if msg and msg.get_type() == 'COMMAND_ACK' and msg.command == command:
             return mavutil.mavlink.enums['MAV_RESULT'][msg.result].name
-    return None
+    raise TimeoutError("Could not send command to vehicle")
 
 
 def request_interval(msg_id, hz):
@@ -211,7 +222,13 @@ def arm():
     # which SITL usually satisfies within a few seconds of boot - so retry.
     deadline = time.time() + 90
     while time.time() < deadline:
-        result = send_command(mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM, 1)
+        try:
+            result = send_command(mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM, 1)
+        except TimeoutError:
+            retry_at = time.time() + 3
+            while time.time() < retry_at:
+                pump()
+            continue
         print(f"Arm command result: {result}")
         if result == "MAV_RESULT_ACCEPTED":
             wait_until(master.motors_armed, 5, "armed state")
