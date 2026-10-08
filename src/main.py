@@ -33,6 +33,8 @@ CRUISE_ALT_M = 40
 CRUISE_SPEED_MS = 12
 WAYPOINT_RADIUS_M = 15
 EARTH_RADIUS_M = 6371008.8
+RETRY_INTERVAL_S = 1.0      # seconds between command retries
+MAX_RETRIES = 5             # max retransmissions before timeout
 WAYPOINTS = [
     (42.3365, -83.0490),   # SE, outside warning ring  -> CLEAR
     (42.3395, -83.0510),   # inbound                   -> WARNING
@@ -74,24 +76,38 @@ frame_count = 0
 threat_state = None
 state_lock = threading.Lock()
 
-
-def send_command(command, *params, wait_ack=True):
+def send_command(command, *params, wait_ack=True, safe_to_retry=True):
+    last_sent = time.time()
     params = list(params) + [0] * (7 - len(params))
-    master.mav.command_long_send(
-        master.target_system,
-        master.target_component,
-        command,
-        0,  # confirmation
-        *params,
-    )
+
+    def send_attempt(attempt):
+        master.mav.command_long_send(
+            master.target_system,
+            master.target_component,
+            command,
+            attempt,
+            *params,
+        )
+
+    attempt = 0
+    send_attempt(attempt)
     if not wait_ack:
         return None
     # Pump other messages while waiting so telemetry keeps being recorded.
-    deadline = time.time() + 5
+    # Deadline is based on max retries with slack; retry count is the real limit.
+    deadline = time.time() + (MAX_RETRIES + 1) * RETRY_INTERVAL_S + 1.0
     while time.time() < deadline:
+        # Only retry if it's safe to resend the command (idempotent or repeatable).
+        # One-time commands (takeoff, etc.) don't retry; caller verifies success by state.
+        if safe_to_retry and time.time() - last_sent > RETRY_INTERVAL_S and attempt < MAX_RETRIES:
+            attempt = attempt + 1
+            last_sent = time.time()
+            send_attempt(attempt)
         msg = pump()
         if msg and msg.get_type() == 'COMMAND_ACK' and msg.command == command:
             return mavutil.mavlink.enums['MAV_RESULT'][msg.result].name
+    if safe_to_retry:
+        raise TimeoutError("Could not send command to vehicle")
     return None
 
 
@@ -211,7 +227,13 @@ def arm():
     # which SITL usually satisfies within a few seconds of boot - so retry.
     deadline = time.time() + 90
     while time.time() < deadline:
-        result = send_command(mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM, 1)
+        try:
+            result = send_command(mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM, 1)
+        except TimeoutError:
+            retry_at = time.time() + 3
+            while time.time() < retry_at:
+                pump()
+            continue
         print(f"Arm command result: {result}")
         if result == "MAV_RESULT_ACCEPTED":
             wait_until(master.motors_armed, 5, "armed state")
@@ -267,7 +289,7 @@ def fly_mission():
     arm()
 
     print(f"Taking off to {CRUISE_ALT_M} m")
-    send_command(mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 0, 0, 0, 0, CRUISE_ALT_M)
+    send_command(mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 0, 0, 0, 0, CRUISE_ALT_M, safe_to_retry=False)
     wait_until(lambda: position["alt"] >= CRUISE_ALT_M * 0.95, 60, "takeoff altitude")
 
     # param1=1 ground speed, param2=speed m/s
