@@ -77,14 +77,18 @@ state_lock = threading.Lock()
 def send_command(command, *params, wait_ack=True, safe_to_retry=True):
     last_sent = time.time()
     params = list(params) + [0] * (7 - len(params))
-    confirmation = 0
-    master.mav.command_long_send(
-        master.target_system,
-        master.target_component,
-        command,
-        confirmation,
-        *params,
-    )
+
+    def send_attempt(attempt):
+        master.mav.command_long_send(
+            master.target_system,
+            master.target_component,
+            command,
+            attempt,
+            *params,
+        )
+
+    attempt = 0
+    send_attempt(attempt)
     if not wait_ack:
         return None
     # Pump other messages while waiting so telemetry keeps being recorded.
@@ -93,16 +97,10 @@ def send_command(command, *params, wait_ack=True, safe_to_retry=True):
     while time.time() < deadline:
         # Only retry if it's safe to resend the command (idempotent or repeatable).
         # One-time commands (takeoff, etc.) don't retry; caller verifies success by state.
-        if safe_to_retry and time.time() - last_sent > 1 and confirmation < max_retry:
-            confirmation = confirmation + 1
+        if safe_to_retry and time.time() - last_sent > 1 and attempt < max_retry:
+            attempt = attempt + 1
             last_sent = time.time()
-            master.mav.command_long_send(
-                master.target_system,
-                master.target_component,
-                command,
-                confirmation,
-                *params,
-            )
+            send_attempt(attempt)
         msg = pump()
         if msg and msg.get_type() == 'COMMAND_ACK' and msg.command == command:
             return mavutil.mavlink.enums['MAV_RESULT'][msg.result].name
