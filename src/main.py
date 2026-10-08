@@ -106,7 +106,9 @@ def send_command(command, *params, wait_ack=True, safe_to_retry=True):
         msg = pump()
         if msg and msg.get_type() == 'COMMAND_ACK' and msg.command == command:
             return mavutil.mavlink.enums['MAV_RESULT'][msg.result].name
-    raise TimeoutError("Could not send command to vehicle")
+    if safe_to_retry:
+        raise TimeoutError("Could not send command to vehicle")
+    return None
 
 
 def request_interval(msg_id, hz):
