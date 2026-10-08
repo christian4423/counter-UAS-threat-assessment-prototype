@@ -5,21 +5,13 @@ and UDP 14550 free, so don't run them while main.py is flying.
 
     src/.venv/bin/python tests/test_send_command.py
 
-main.py has no __main__ guard (it flies on import), so this loads only the part
-above "# Start each run" - all the functions and the MAVLink connection - and
-then wraps command_long_send to drop chosen packets, simulating UDP loss.
+Wraps command_long_send to drop chosen packets, simulating UDP loss.
 """
-import sys
 import time
-from pathlib import Path
 
-MAIN = Path(__file__).resolve().parent.parent / "src" / "main.py"
+from harness import load_main, run_tests
 
-src = MAIN.read_text()
-src = src[:src.index("# Start each run")]       # skip the module-level flight
-ns = {"__file__": str(MAIN), "__name__": "send_command_tests"}
-exec(compile(src, str(MAIN), "exec"), ns)
-
+ns = load_main()
 master, send_command, mavlink = ns["master"], ns["send_command"], ns["mavutil"].mavlink
 real_send = master.mav.command_long_send
 
@@ -80,14 +72,4 @@ def test_unsafe_command_is_never_resent():
 
 
 if __name__ == "__main__":
-    tests = [v for k, v in list(globals().items()) if k.startswith("test_")]
-    failed = 0
-    for test in tests:
-        try:
-            test()
-            print(f"PASS  {test.__name__}")
-        except AssertionError as e:
-            failed += 1
-            print(f"FAIL  {test.__name__}: {e}")
-    print(f"\n{len(tests) - failed}/{len(tests)} passed")
-    sys.exit(1 if failed else 0)
+    run_tests(globals())
