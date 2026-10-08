@@ -56,6 +56,26 @@ Example output from one flight:
   - [`app.py`](mapserver/app.py) holds **all geometry**: the asset polygon, the zone rings (drawn as true ground-distance circles, corrected for Web Mercator scale) and the drone and its track. Each is added to an empty layer as an inline feature.
 - **`src/main.py`** is the operator-side client. It sends commands to the vehicle and records telemetry. It also requests map frames on a worker thread, so slow tile rendering never stalls the MAVLink connection.
 
+## Link reliability over UDP
+
+MAVLink runs over UDP, so any packet can be lost. Rather than switching to TCP, which would stall fresh telemetry behind retransmissions of stale data, the client adds reliability only where each message needs it:
+
+| Message | Risk if lost | Handling |
+|---|---|---|
+| Position setpoint (`SET_POSITION_TARGET_GLOBAL_INT`) | Drone never leaves its waypoint | Resent at 2 Hz until telemetry shows arrival within 15 m, with a 180 s deadline |
+| Commands (`COMMAND_LONG`) | Mode, arm or stream request silently ignored | Resent every 1 s until `COMMAND_ACK`, `confirmation` counting each resend, up to 5 retries |
+| Takeoff | A resend after a lost acknowledgement is refused, because the drone is already climbing | Sent once (`safe_to_retry=False`); success is judged by altitude, not the acknowledgement |
+| Parameters (`PARAM_SET`) | Failsafe settings not applied | Resent until a `PARAM_VALUE` echoes the new value |
+| GCS heartbeat | The vehicle cannot tell the client has died | Sent at 1 Hz from every wait loop |
+
+Every wait goes through one function, `pump()`, which reads the newest message, sends the heartbeat and keeps the track and map updating. A loop that reads messages on its own falls behind real time and acts on stale positions.
+
+**Failsafe.** Before arming, the client sets two vehicle parameters:
+- `SYSID_MYGCS` = 254, its own MAVLink system ID.
+- `FS_GCS_ENABLE` = 1, so the vehicle returns home if heartbeats stop.
+
+The vehicle then ignores MAVProxy's heartbeats, which use system ID 255. If the client is killed mid-flight, the vehicle logs `GCS Failsafe` and switches to RTL about 5 s later, even though MAVProxy is still running.
+
 ## Running it locally
 
 ### Prerequisites
@@ -129,11 +149,16 @@ To fly again from the pad, run `docker compose up -d`, wait for the GPS fix, the
 
 ### Tests
 
-`tests/test_send_command.py` checks the MAVLink command retry logic by dropping chosen outgoing packets, simulating UDP loss. It needs the simulator running and UDP 14550 free, so don't run it while `main.py` is flying.
+Integration tests run against the live simulator, deliberately dropping or recording outgoing packets to check how the client handles UDP loss. They need the simulator running and UDP 14550 free, so don't run them while `main.py` is flying. Each file takes 10–30 s.
 
 ```bash
 src/.venv/bin/python tests/test_send_command.py
+src/.venv/bin/python tests/test_gcs_link.py
 ```
+
+`tests/harness.py` loads `main.py`'s functions and MAVLink connection without starting a flight.
+
+**`test_send_command.py`**: command retries
 
 | Test | Checks |
 |---|---|
@@ -141,6 +166,16 @@ src/.venv/bin/python tests/test_send_command.py
 | `test_recovers_after_two_drops` | Resends count `confirmation` 0, 1, 2, spaced ≥ 1 s apart, then accepted |
 | `test_gives_up_after_max_retries` | Sends the original plus 5 retries, then raises `TimeoutError` |
 | `test_unsafe_command_is_never_resent` | `safe_to_retry=False` sends exactly once and returns `None` on a lost acknowledgement, so the caller can check vehicle state |
+
+**`test_gcs_link.py`**: heartbeat and parameters
+
+| Test | Checks |
+|---|---|
+| `test_heartbeat_is_about_1hz` | Heartbeats keep flowing through `pump()`, 0.9–1.6 s apart |
+| `test_heartbeat_identifies_as_this_gcs` | Heartbeats are `MAV_TYPE_GCS` and sent as system ID 254, not MAVProxy's 255 |
+| `test_set_param_confirms_value` | `set_param` returns the value the vehicle echoes back |
+| `test_set_param_retries_after_drops` | Two lost `PARAM_SET`s, then success on the third send |
+| `test_set_param_unknown_name_times_out` | A parameter the vehicle doesn't have raises `TimeoutError` rather than reporting success |
 
 ### Troubleshooting
 

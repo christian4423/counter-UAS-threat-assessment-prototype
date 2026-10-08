@@ -32,7 +32,6 @@ GIF_SPEEDUP = 8          # playback speed relative to real time
 CRUISE_ALT_M = 40
 CRUISE_SPEED_MS = 12
 WAYPOINT_RADIUS_M = 15
-EARTH_RADIUS_M = 6371008.8
 RETRY_INTERVAL_S = 1.0      # seconds between command retries
 MAX_RETRIES = 5             # max retransmissions before timeout
 WAYPOINTS = [
@@ -41,12 +40,13 @@ WAYPOINTS = [
     (42.3411, -83.0550),   # over the arena            -> BREACH
     (42.3450, -83.0605),   # exit NW                   -> CLEAR
 ]
-
+EARTH_RADIUS_M = 6371008.8
+SYSID_MYGCS = 254
 # Create a connection to the SITL instance
 # TCP 5760 is single-client only (the container's own MAVProxy already holds it),
 # so we use the UDP stream MAVProxy forwards out, routed via host.docker.internal
 # so it actually escapes the container's network namespace to reach the host.
-master = mavutil.mavlink_connection('udp:127.0.0.1:14550')
+master = mavutil.mavlink_connection('udp:127.0.0.1:14550', source_system = SYSID_MYGCS )
 
 # Wait for the heartbeat message to find the system ID
 # Every compliant MAVLink system should send a heartbeat at a regular interval (1s)
@@ -67,6 +67,7 @@ position = None          # dict(lat, lon, alt, vn, ve)
 track = []               # [(lat, lon), ...] breadcrumbs
 last_track_time = 0.0
 last_frame_time = 0.0
+last_gcs_heartbeat_time = 0.0
 
 # Map frames are fetched on a worker thread so a slow render (tile download)
 # never stalls the MAVLink receive loop.
@@ -75,6 +76,17 @@ frame_pending = None
 frame_count = 0
 threat_state = None
 state_lock = threading.Lock()
+
+
+
+def send_gcs_heartbeat():
+    # Sends a standard GCS heartbeat message
+    master.mav.heartbeat_send(
+        mavutil.mavlink.MAV_TYPE_GCS,
+        mavutil.mavlink.MAV_AUTOPILOT_INVALID,
+        0, 0,
+        mavutil.mavlink.MAV_STATE_ACTIVE
+    )
 
 def send_command(command, *params, wait_ack=True, safe_to_retry=True):
     last_sent = time.time()
@@ -109,6 +121,30 @@ def send_command(command, *params, wait_ack=True, safe_to_retry=True):
     if safe_to_retry:
         raise TimeoutError("Could not send command to vehicle")
     return None
+
+
+def set_param(param_name, param_value):
+    """Send a parameter set request and wait for confirmation via PARAM_VALUE."""
+    last_sent = time.time()
+
+    def send_attempt():
+        master.param_set_send(param_name, param_value)
+
+    attempt = 0
+    send_attempt()
+    deadline = time.time() + (MAX_RETRIES + 1) * RETRY_INTERVAL_S + 1.0
+    while time.time() < deadline:
+        if time.time() - last_sent > RETRY_INTERVAL_S and attempt < MAX_RETRIES:
+            attempt = attempt + 1
+            last_sent = time.time()
+            send_attempt()
+        msg = pump()
+        if msg and msg.get_type() == 'PARAM_VALUE' and msg.param_id == param_name:
+            # Confirm the value changed, not just the name. Vehicle echoes PARAM_VALUE
+            # even on rejection, but with the old value.
+            if abs(msg.param_value - param_value) < 1e-3:
+                return msg.param_value
+    raise TimeoutError(f"Could not set parameter {param_name}")
 
 
 def request_interval(msg_id, hz):
@@ -177,11 +213,16 @@ def pump(timeout=1):
     """Read one telemetry message and record it. Every wait in the script goes
     through here, so graphs/track/map frames keep updating during each phase."""
     global last_heartbeat
+    global last_gcs_heartbeat_time
+    now = time.time()
+    if now - last_gcs_heartbeat_time > 1:
+        send_gcs_heartbeat()
+        last_gcs_heartbeat_time = now
     # Read the telemetry stream
     # loop and receive messages (.recv_match(...)),
     # see the typed, structured messages
     msg = master.recv_match(
-        type=['HEARTBEAT', 'ATTITUDE', 'GLOBAL_POSITION_INT', 'COMMAND_ACK', 'STATUSTEXT'],
+        type=['HEARTBEAT', 'ATTITUDE', 'GLOBAL_POSITION_INT', 'COMMAND_ACK', 'STATUSTEXT', 'PARAM_VALUE'],
         blocking=True, timeout=timeout)
     if msg:
         msg_type = msg.get_type()
@@ -201,7 +242,7 @@ def pump(timeout=1):
                 # Namespace by message type so fields never collide across
                 # message types (e.g. two types sharing a field name).
                 graph_values[f"{msg_type}.{key}"].append(value)
-    if time.time() - last_heartbeat > HEARTBEAT_TIMEOUT:
+    if now - last_heartbeat > HEARTBEAT_TIMEOUT:
         raise ConnectionError("Heartbeat timeout! Link considered lost.")
     return msg
 
@@ -284,12 +325,17 @@ def fly_mission():
     request_interval(mavutil.mavlink.MAVLINK_MSG_ID_ATTITUDE, 4)
     request_interval(mavutil.mavlink.MAVLINK_MSG_ID_GLOBAL_POSITION_INT, 4)
     wait_until(lambda: position is not None, 10, "first position fix")
-
+    set_param("SYSID_MYGCS", SYSID_MYGCS)
+    set_param("FS_GCS_ENABLE", 1)
     set_mode("GUIDED")
     arm()
 
     print(f"Taking off to {CRUISE_ALT_M} m")
-    send_command(mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 0, 0, 0, 0, CRUISE_ALT_M, safe_to_retry=False)
+
+    result = send_command(mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 0, 0, 0, 0, CRUISE_ALT_M, safe_to_retry=False)
+    if result not in (None, "MAV_RESULT_ACCEPTED"):
+        raise RuntimeError(f"Takeoff rejected: {result}")
+    
     wait_until(lambda: position["alt"] >= CRUISE_ALT_M * 0.95, 60, "takeoff altitude")
 
     # param1=1 ground speed, param2=speed m/s
