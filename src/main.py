@@ -74,30 +74,33 @@ frame_count = 0
 threat_state = None
 state_lock = threading.Lock()
 
-
-def send_command(command, *params, wait_ack=True):
+def send_command(command, *params, wait_ack=True, safe_to_retry=True):
     last_sent = time.time()
     params = list(params) + [0] * (7 - len(params))
+    confirmation = 0
     master.mav.command_long_send(
         master.target_system,
         master.target_component,
         command,
-        0,  # confirmation
+        confirmation,
         *params,
     )
     if not wait_ack:
         return None
     # Pump other messages while waiting so telemetry keeps being recorded.
     deadline = time.time() + 5
-
+    max_retry = 5
     while time.time() < deadline:
-        if time.time() - last_sent > 0.5:
+        # Only retry if it's safe to resend the command (idempotent or repeatable).
+        # One-time commands (takeoff, etc.) don't retry; caller verifies success by state.
+        if safe_to_retry and time.time() - last_sent > 1 and confirmation < max_retry:
+            confirmation = confirmation + 1
             last_sent = time.time()
             master.mav.command_long_send(
                 master.target_system,
                 master.target_component,
                 command,
-                0,  # confirmation
+                confirmation,
                 *params,
             )
         msg = pump()
@@ -284,7 +287,7 @@ def fly_mission():
     arm()
 
     print(f"Taking off to {CRUISE_ALT_M} m")
-    send_command(mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 0, 0, 0, 0, CRUISE_ALT_M)
+    send_command(mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 0, 0, 0, 0, CRUISE_ALT_M, safe_to_retry=False)
     wait_until(lambda: position["alt"] >= CRUISE_ALT_M * 0.95, 60, "takeoff altitude")
 
     # param1=1 ground speed, param2=speed m/s
