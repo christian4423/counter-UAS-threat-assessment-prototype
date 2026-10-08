@@ -140,7 +140,7 @@ src/.venv/bin/python tests/test_send_command.py
 | `test_no_loss` | One send, `confirmation` 0, accepted |
 | `test_recovers_after_two_drops` | Resends count `confirmation` 0, 1, 2, spaced ≥ 1 s apart, then accepted |
 | `test_gives_up_after_max_retries` | Sends the original plus 5 retries, then raises `TimeoutError` |
-| `test_unsafe_command_is_never_resent` | `safe_to_retry=False` sends exactly once |
+| `test_unsafe_command_is_never_resent` | `safe_to_retry=False` sends exactly once and returns `None` on a lost acknowledgement, so the caller can check vehicle state |
 
 ### Troubleshooting
 

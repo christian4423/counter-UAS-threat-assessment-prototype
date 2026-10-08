@@ -72,8 +72,10 @@ def test_gives_up_after_max_retries():
 
 
 def test_unsafe_command_is_never_resent():
+    # A lost ACK for a non-idempotent command (e.g. takeoff) must not abort the
+    # caller: send_command returns None and the caller confirms by vehicle state.
     result, sends = run(drop_first=99, safe_to_retry=False)
-    assert isinstance(result, TimeoutError), result
+    assert result is None, f"expected None so the caller can check state, got {result!r}"
     assert len(sends) == 1, f"non-idempotent command was resent: {sends}"
 
 
