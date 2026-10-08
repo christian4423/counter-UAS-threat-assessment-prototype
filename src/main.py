@@ -87,7 +87,6 @@ def send_gcs_heartbeat():
         0, 0,
         mavutil.mavlink.MAV_STATE_ACTIVE
     )
-    print("[GCS] Heartbeat sent.")
 
 def send_command(command, *params, wait_ack=True, safe_to_retry=True):
     last_sent = time.time()
