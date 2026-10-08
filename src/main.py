@@ -289,7 +289,11 @@ def fly_mission():
     arm()
 
     print(f"Taking off to {CRUISE_ALT_M} m")
-    send_command(mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 0, 0, 0, 0, CRUISE_ALT_M, safe_to_retry=False)
+
+    result = send_command(mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 0, 0, 0, 0, CRUISE_ALT_M, safe_to_retry=False)
+    if result not in (None, "MAV_RESULT_ACCEPTED"):
+        raise RuntimeError(f"Takeoff rejected: {result}")
+    
     wait_until(lambda: position["alt"] >= CRUISE_ALT_M * 0.95, 60, "takeoff altitude")
 
     # param1=1 ground speed, param2=speed m/s
