@@ -127,6 +127,21 @@ docker compose down
 
 To fly again from the pad, run `docker compose up -d`, wait for the GPS fix, then run `python main.py`. Restarting the containers resets the simulated vehicle to its home position.
 
+### Tests
+
+`tests/test_send_command.py` checks the MAVLink command retry logic by dropping chosen outgoing packets, simulating UDP loss. It needs the simulator running and UDP 14550 free, so don't run it while `main.py` is flying.
+
+```bash
+src/.venv/bin/python tests/test_send_command.py
+```
+
+| Test | Checks |
+|---|---|
+| `test_no_loss` | One send, `confirmation` 0, accepted |
+| `test_recovers_after_two_drops` | Resends count `confirmation` 0, 1, 2, spaced ≥ 1 s apart, then accepted |
+| `test_gives_up_after_max_retries` | Sends the original plus 5 retries, then raises `TimeoutError` |
+| `test_unsafe_command_is_never_resent` | `safe_to_retry=False` sends exactly once |
+
 ### Troubleshooting
 
 | Symptom | Cause / fix |

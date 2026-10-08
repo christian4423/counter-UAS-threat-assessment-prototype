@@ -33,6 +33,8 @@ CRUISE_ALT_M = 40
 CRUISE_SPEED_MS = 12
 WAYPOINT_RADIUS_M = 15
 EARTH_RADIUS_M = 6371008.8
+RETRY_INTERVAL_S = 1.0      # seconds between command retries
+MAX_RETRIES = 5             # max retransmissions before timeout
 WAYPOINTS = [
     (42.3365, -83.0490),   # SE, outside warning ring  -> CLEAR
     (42.3395, -83.0510),   # inbound                   -> WARNING
@@ -92,12 +94,12 @@ def send_command(command, *params, wait_ack=True, safe_to_retry=True):
     if not wait_ack:
         return None
     # Pump other messages while waiting so telemetry keeps being recorded.
-    deadline = time.time() + 5
-    max_retry = 5
+    # Deadline is based on max retries with slack; retry count is the real limit.
+    deadline = time.time() + (MAX_RETRIES + 1) * RETRY_INTERVAL_S + 1.0
     while time.time() < deadline:
         # Only retry if it's safe to resend the command (idempotent or repeatable).
         # One-time commands (takeoff, etc.) don't retry; caller verifies success by state.
-        if safe_to_retry and time.time() - last_sent > 1 and attempt < max_retry:
+        if safe_to_retry and time.time() - last_sent > RETRY_INTERVAL_S and attempt < MAX_RETRIES:
             attempt = attempt + 1
             last_sent = time.time()
             send_attempt(attempt)
