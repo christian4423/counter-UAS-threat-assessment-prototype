@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bluenviron/gomavlib/v4"
+	"github.com/bluenviron/gomavlib/v4/pkg/dialects/ardupilotmega"
 )
 
 func main() {
@@ -28,6 +29,7 @@ func main() {
 			&gomavlib.EndpointUDPServer{Address: *listenAddr},
 			&gomavlib.EndpointUDPClient{Address: *forwardAddr},
 		},
+		Dialect:          ardupilotmega.Dialect,
 		OutVersion:       gomavlib.V2,
 		OutSystemID:      253,
 		HeartbeatDisable: true,
@@ -56,6 +58,8 @@ func main() {
 	// Frames are counted and summarized once per second, or every 500 frames, whichever comes first.
 	const summaryEvery = 500
 	frames := 0
+	var fwdErrors int
+	var lastFwdErrLog time.Time
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	logSummary := func() {
@@ -85,14 +89,22 @@ loop:
 
 				// Forward the frame to all other endpoints connected to this node
 				// (Because forwardAddr is defined in the endpoints slice, node.WriteFrameExcept routes it automatically)
-				node.WriteFrameExcept(e.Channel, e.Frame)
+				if err := node.WriteFrameExcept(e.Channel, e.Frame); err != nil {
+					// A failing forward tends to repeat on every frame, so log at most once per second
+					fwdErrors++
+					if now := time.Now(); now.Sub(lastFwdErrLog) >= time.Second {
+						log.Printf("Forward error: %v (%d failures since last report)", err, fwdErrors)
+						lastFwdErrLog = now
+						fwdErrors = 0
+					}
+				}
 			case *gomavlib.EventChannelOpen:
 				log.Printf("MAVLink Channel opened: %v", e.Channel)
 
 			case *gomavlib.EventChannelClose:
 				log.Printf("MAVLink Channel closed: %v", e.Channel)
 			case *gomavlib.EventParseError:
-				log.Printf("MAVLink Parsing error: %v", e.Channel)
+				log.Printf("MAVLink Parsing error on %v: %v", e.Channel, e.Error)
 			}
 		}
 	}
