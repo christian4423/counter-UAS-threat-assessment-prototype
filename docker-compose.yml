@@ -4,7 +4,7 @@ services:
     platform: linux/amd64
     tty: true
     environment:
-      - SITL_UDP_OUTPUT_ADDRESS=udp:host.docker.internal:14550
+      - SITL_UDP_OUTPUT_ADDRESS=udp:ingest:14550
       # Home = takeoff/landing spot SE of Little Caesars Arena, Detroit
       # (ground elevation ~183 m MSL).
       - LAT=42.33927724437817
@@ -15,6 +15,11 @@ services:
     # replies return through Docker's NAT state, so 14550/udp is not published.
     ports:
       - 5760:5760
+    depends_on: [ingest]
+  ingest:
+    build: ./ingest
+    command: ["-listen", "0.0.0.0:14550", "-forward", "host.docker.internal:14551"]
+    extra_hosts: ["host.docker.internal:host-gateway"] # Docker Desktop on a Mac doesn't need this, but Linux does, so it keeps the repo portable.
 
   mapserver:
     build: ./mapserver
