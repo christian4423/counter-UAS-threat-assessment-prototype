@@ -46,7 +46,7 @@ SYSID_MYGCS = 254
 # TCP 5760 is single-client only (the container's own MAVProxy already holds it),
 # so we use the UDP stream MAVProxy forwards out, routed via host.docker.internal
 # so it actually escapes the container's network namespace to reach the host.
-master = mavutil.mavlink_connection('udp:127.0.0.1:14550', source_system = SYSID_MYGCS )
+master = mavutil.mavlink_connection('udp:127.0.0.1:14551', source_system = SYSID_MYGCS )
 
 # Wait for the heartbeat message to find the system ID
 # Every compliant MAVLink system should send a heartbeat at a regular interval (1s)
