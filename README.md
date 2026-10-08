@@ -33,28 +33,41 @@ Example output from one flight:
 ## Architecture
 
 ```
-┌──────────────────────┐   MAVLink/UDP 14550   ┌───────────────────────────┐
-│ ardupilot-sitl       │ ────────────────────▶ │ src/main.py (host)        │
-│ ArduCopter 4.5.7     │ ◀──────────────────── │ - flies scripted route    │
-│ + MAVProxy           │   GUIDED setpoints    │ - records telemetry/track │
-└──────────────────────┘                       │ - requests map frames     │
-                                               └─────────────┬─────────────┘
-                                                             │ HTTP GET /map
-                                               ┌─────────────▼─────────────┐
-                                               │ mapserver (FastAPI)       │
-                                               │ - python3-mapscript 7.6   │
-                                               │ - threat state + TTB      │
-                                               │ - renders PNG             │
-                                               └─────────────┬─────────────┘
-                                                             │ GDAL WMS/TMS
-                                                     Esri World Imagery tiles
+┌──────────────────────┐  MAVLink/UDP   ┌───────────────────┐  MAVLink/UDP   ┌───────────────────────────┐
+│ ardupilot-sitl       │  ingest:14550  │ ingest (Go)       │  host:14551    │ src/main.py (host)        │
+│ ArduCopter 4.5.7     │ ─────────────▶ │ - routes MAVLink  │ ─────────────▶ │ - flies scripted route    │
+│ + MAVProxy           │ ◀───────────── │   both directions │ ◀───────────── │ - records telemetry/track │
+└──────────────────────┘                └───────────────────┘   commands,    │ - requests map frames     │
+                                                                 heartbeat    └─────────────┬─────────────┘
+                                                                                            │ HTTP GET /map
+                                                                              ┌─────────────▼─────────────┐
+                                                                              │ mapserver (FastAPI)       │
+                                                                              │ - python3-mapscript 7.6   │
+                                                                              │ - threat state + TTB      │
+                                                                              │ - renders PNG             │
+                                                                              └─────────────┬─────────────┘
+                                                                                            │ GDAL WMS/TMS
+                                                                                    Esri World Imagery tiles
 ```
 
-- **`ardupilot-sitl`** is ArduPilot's software-in-the-loop simulator, with its home position set at the arena.
+- **`ardupilot-sitl`** is ArduPilot's software-in-the-loop simulator, with its home position set at the arena. MAVProxy, inside the same container, holds the simulator's single TCP connection and sends its MAVLink stream to the router.
+- **`ingest`** is a Go service built on [gomavlib](https://github.com/bluenviron/gomavlib). It sits between the simulator and every downstream consumer and forwards MAVLink frames in both directions without re-encoding them: telemetry out to `main.py`, and commands, setpoints and heartbeats back to the vehicle. It is the base for link-health statistics and a vehicle-state API.
 - **`mapserver`** is MapServer run in-process through its Python bindings (mapscript), not as CGI. The work is split two ways:
   - [`basemap.map`](mapserver/mapfiles/basemap.map) holds **all styling**: zone colors, the three threat-state marker layers and the label overlays.
   - [`app.py`](mapserver/app.py) holds **all geometry**: the asset polygon, the zone rings (drawn as true ground-distance circles, corrected for Web Mercator scale) and the drone and its track. Each is added to an empty layer as an inline feature.
-- **`src/main.py`** is the operator-side client. It sends commands to the vehicle and records telemetry. It also requests map frames on a worker thread, so slow tile rendering never stalls the MAVLink connection.
+- **`src/main.py`** is the operator-side client. It listens on UDP 14551. It sends commands to the vehicle and records telemetry. It also requests map frames on a worker thread, so slow tile rendering never stalls the MAVLink connection.
+
+### Networking
+
+| Path | How it is addressed | Published port? |
+|---|---|---|
+| Simulator ↔ MAVProxy | `127.0.0.1:5760` inside one container | No |
+| MAVProxy → `ingest` | Compose service name, `ingest:14550` | No |
+| `ingest` → `main.py` | `host.docker.internal:14551` (container to Mac) | No |
+| `main.py` → `ingest` (commands) | Replies to the router's own packets; Docker tracks the conversation | No |
+| `main.py` and browser → `mapserver` | `localhost:8080` | Yes, `8080:8000` |
+
+Only the map server publishes a port, because it is the only service the host contacts first. `ingest` adds `host.docker.internal:host-gateway` under `extra_hosts`; Docker Desktop on macOS doesn't need it, but Linux does.
 
 ## Link reliability over UDP
 
@@ -83,7 +96,7 @@ The vehicle then ignores MAVProxy's heartbeats, which use system ID 255. If the 
 - **Docker** with Compose v2 (Docker Desktop on macOS/Windows)
 - **Python 3.10+** on the host
 - **Internet access**: the build clones ArduPilot, and the map server downloads imagery tiles
-- **UDP port 14550 free** on the host. Close QGroundControl or Mission Planner, since they listen on the same port.
+- **UDP port 14551 free** on the host: `main.py` listens there for the router's stream.
 
 ### 1. Clone
 
@@ -100,10 +113,11 @@ docker compose up -d --build
 
 The first build is slow because it compiles ArduPilot from source. On Apple Silicon it is slower still: the SITL image is `linux/amd64` and runs under emulation. Later starts reuse the cached image.
 
-### 3. Check both services
+### 3. Check the services
 
 ```bash
-docker compose ps                      # both containers should be "Up"
+docker compose ps                      # all three containers should be "Up"
+docker compose logs ingest             # "[Frames] N frames since last summary" once the simulator connects
 curl http://localhost:8080/health      # {"status":"ok"}
 ```
 
@@ -149,7 +163,7 @@ To fly again from the pad, run `docker compose up -d`, wait for the GPS fix, the
 
 ### Tests
 
-Integration tests run against the live simulator, deliberately dropping or recording outgoing packets to check how the client handles UDP loss. They need the simulator running and UDP 14550 free, so don't run them while `main.py` is flying. Each file takes 10–30 s.
+Integration tests run against the live simulator, deliberately dropping or recording outgoing packets to check how the client handles UDP loss. They need the simulator and router running and UDP 14551 free, so don't run them while `main.py` is flying. Each file takes 10–30 s.
 
 ```bash
 src/.venv/bin/python tests/test_send_command.py
@@ -181,7 +195,8 @@ src/.venv/bin/python tests/test_gcs_link.py
 
 | Symptom | Cause / fix |
 |---|---|
-| `main.py` hangs with no "Heartbeat from system" line | No MAVLink is reaching port 14550. Check that `ardupilot-sitl` is up, and that no ground-control app is holding the port. |
+| `main.py` hangs with no "Heartbeat from system" line | No MAVLink is reaching port 14551. Check that `ardupilot-sitl` and `ingest` are up (`docker compose ps`), that `docker compose logs ingest` shows `[Frames]` lines, and that nothing else is bound to 14551. |
+| `ingest` logs `Channel closed: udp:host.docker.internal:14551` about every 60 s | Expected while `main.py` isn't running. gomavlib closes a connection after 60 s without incoming traffic and reopens it 2 s later. Once `main.py` runs, its 1 Hz heartbeat keeps the connection open. |
 | `Arm: Need Position Estimate` repeats | Normal for the first minute after boot. The script retries arming for 90 s; if it gives up, wait and rerun. |
 | `Map render failed` in the console, or a black map | The map server can't download imagery tiles. Check its internet access: `docker compose logs mapserver`. |
 | Changes to `mapserver/` don't show up | The app and mapfiles are baked into the image. Rebuild with `docker compose up -d --build mapserver`. |

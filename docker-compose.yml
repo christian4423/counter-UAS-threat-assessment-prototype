@@ -11,8 +11,8 @@ services:
       - LON=-83.05286810960271
       - ALT=183
       - DIR=0
-    # MAVLink leaves the container (MAVProxy -> host.docker.internal:14550) and
-    # replies return through Docker's NAT state, so 14550/udp is not published.
+    # MAVProxy sends to the ingest router by service name over the compose network; 
+    #nothing here needs a published UDP port.
     ports:
       - 5760:5760
     depends_on: [ingest]
